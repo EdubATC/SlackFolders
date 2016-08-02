@@ -6,18 +6,22 @@
 // @author       Eric Wehrly
 // @match        https://autotrader-us.slack.com/**
 // @require      https://gist.github.com/raw/2625891/waitForKeyElements.js
-// @require      http://userscripts.org/scripts/source/107941.user.js
-// @grant        none
+// @require      https://greasyfork.org/scripts/622-super-gm-setvalue-and-gm-getvalue-js/code/Super_GM_setValue_and_GM_getValuejs.js?version=1786
+// @grant    GM_getValue
+// @grant    GM_setValue
 // ==/UserScript==
 
-// TODO: Finish context menu so the same script is usable without edits
-// TODO: Use persistent storage a la http://stackoverflow.com/questions/15730216/how-where-to-store-data-in-a-chrome-tampermonkey-script and http://userscripts-mirror.org/scripts/show/107941
 // TODO: Hook into slack's loading complete event rather than statically waiting
+// TODO: Fix folders disappearing / being unloaded intermittently ... or hook into what's doing it ...
+
+var currentFolder = null;
+var currentChannel = null;
+
+var slackFolders = GM_SuperValue.get ("SlackFolders", {});
 
 // let slack take its sweet time loading
 setTimeout(function() {
     waitForKeyElements ("#channel-list", createFolders);
-    // createContextMenu(); // Under construnction
 }, 2300);
 
 function createFolders() {
@@ -26,46 +30,9 @@ function createFolders() {
 
     console.log("Creating folders.");
 
-    var slackFolders = {};
-    slackFolders.Dev = {
-        "channel_C16MQSUBH" : "rhel7",
-        "channel_C07BWSCMT" : "atc-engineering",
-        "channel_C0KF1KXKL" : "jokerteam",
-        "group_G0ZKLQPTQ"   : "soa-dev",
-        "channel_C198VK15J" : "gb-microservices"
-    };
-    slackFolders.PoC = {
-        "channel_C07BWFC87" : "git",
-        "channel_C0MPFEVFT" : "jira-chat",
-        "channel_C09QP2BSA" : "pipelines"
-    };
-    slackFolders.Other = {
-        "channel_C14R1KE91" : "actional-upgrade",
-        "channel_C17RQ4VT2" : "syc-microservices",
-        "channel_C0992LRRV" : "splunk",
-        "channel_C07BWEH1Q" : "soa",
-        "channel_C07BWHRC1" : "test-automation"
-    };
-    slackFolders.Chat = {
-        "channel_C0503U1CB" : "general",
-        "group_G06QY3Q5T"   : "cool-kids",
-        "channel_C08EARVBK" : "game-night",
-        "channel_C0CS6SKFT" : "microservices",
-        "channel_C06PSK3BN" : "monitoring"
-    };
-
     for(var slackFolder in slackFolders) { createFolder(slackFolder, slackFolders[slackFolder]); }
 
-    $(".channel-folder").click(function() {
-
-        var folderId = $(this).attr("id");
-        folderId = folderId.replace("channel-folder-", "");
-
-        for(var channel in slackFolders[folderId])
-        {
-            $("." + channel).toggle();
-        }
-    });
+    bindChannelFolders();
 
     $(".channel:not(.channel-folder),.group,.member").click(function() {
         setTimeout(function() {
@@ -73,11 +40,32 @@ function createFolders() {
         }, 50);
     });
 
+    createContextMenu();
+
     // Hacky fix for inexplicable disappearance
     setInterval(createFolders, 5000);
 }
 
+function bindChannelFolders() {
+
+    $(".channel-folder").unbind( "click" );
+
+    $(".channel-folder").click(function() {
+
+        var folderId = $(this).attr("id");
+        folderId = folderId.replace("channel-folder-", "");
+        console.log(slackFolders[folderId]);
+
+        for(var channel in slackFolders[folderId])
+        {
+            $("." + channel).toggle();
+        }
+    });
+}
+
 function createFolder(folderName, folderObject) {
+
+    jQuery("#channel-folder-" + folderName).remove();
 
     $('#channel-list').prepend(buildLiHtml(folderName));
 
@@ -99,7 +87,7 @@ function buildLiHtml(folderName) {
         '<span class="display_flex"><ts-icon class="ts_icon_folder prefix" style="margin-right: 4px; margin-left: -2px;"></ts-icon> ' + folderName + '</span>' +
         '</a></li>';
 
-    // ts_icon_folder_open
+    // TODO: ts_icon_folder_open
 }
 
 function createContextMenu() {
@@ -119,11 +107,29 @@ function createContextMenu() {
     }
     document.head.appendChild(style);
 
-    // bind a different event to document context menu that dismisses the menu if its visible
+    // TODO: bind a different event to document context menu that dismisses the menu if its visible
 
     $(".channel-folder").bind("contextmenu", function (event) {
 
+        currentFolder = this;
+
         populateFolderContextMenu(event.currentTarget.id);
+
+        event.preventDefault();
+
+        $(".custom-menu").finish().toggle(100).
+        css({
+            top: event.pageY + "px",
+            left: event.pageX + "px"
+        });
+    });
+
+    // TOOD: Don't link channels that are "in" folders ...
+    $(".channel:not(.channel-folder),.group,.member").bind("contextmenu", function (event) {
+
+        currentChannel = this;
+
+        populateChannelConextMenu();
 
         event.preventDefault();
 
@@ -137,7 +143,53 @@ function createContextMenu() {
 
 function populateChannelConextMenu() {
 
-    $(".custom-menu").html("");
+    $(".custom-menu").html('<li id="addFolderItem">add to new folder</li>');
+
+    $("#addFolderItem").click(function() {
+
+        if("new" in slackFolders) console.log("New dere");
+        else slackFolders.new = {};
+
+        addChannelToFolder(currentChannel, "new");
+
+        createFolders();
+    });
+
+    for(var slackFolder in slackFolders) {
+
+        $(".custom-menu").prepend('<li>add to ' + slackFolder + '</li>');
+        // So this had to get a little bit more complicated than just passing to the click event.
+        // I think that may have to do with trying to kind of shim byref vars into byval. Or I don't know how to javascript.
+        $(".custom-menu li:first-child").bind('click',
+                                              { currentChannel: currentChannel, slackFolder: slackFolder },
+                                              function(event) { addChannelToFolder(event.data.currentChannel, event.data.slackFolder); });
+    }
+}
+
+function addChannelToFolder(channel, folderName) {
+
+    var channelClass = "";
+    var channelName = jQuery(channel).text().replace(/0/g, '').trim();
+    var classNames = channel.className.split(/\s+/);
+    for(var classIndex in classNames) {
+        var className = classNames[classIndex];
+        if(className.indexOf("group_") > -1 || className.indexOf("channel_") > -1) {
+            channelClass = className;
+            break;
+        }
+    }
+
+    slackFolders[folderName][channelClass] = channelName;
+
+    GM_SuperValue.set ("SlackFolders", slackFolders);
+
+    $("." + channelClass)
+        .css("display", "none")
+        .css("margin-left", "4px")
+        .detach()
+        .insertAfter("#channel-folder-" + folderName);
+
+    $(".custom-menu").finish().toggle(100);
 }
 
 function populateFolderContextMenu(folder) {
@@ -152,7 +204,17 @@ function populateFolderContextMenu(folder) {
 
 function renameFolder(event) {
 
+    var oldFolderName = currentFolder.id.replace("channel-folder-", "");
     var newFolderName = prompt("New folder name:");
 
-    console.log(event);
+    slackFolders[newFolderName] = slackFolders[oldFolderName];
+    delete slackFolders[oldFolderName];
+
+    createFolder(newFolderName, slackFolders[newFolderName]);
+
+    bindChannelFolders();
+
+    $(".custom-menu").finish().toggle(100);
+
+    GM_SuperValue.set ("SlackFolders", slackFolders);
 }
