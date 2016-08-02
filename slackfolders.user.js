@@ -43,7 +43,7 @@ function createFolders() {
     createContextMenu();
 
     // Hacky fix for inexplicable disappearance
-    setInterval(createFolders, 5000);
+    setTimeout(createFolders, 5000);
 }
 
 function bindChannelFolders() {
